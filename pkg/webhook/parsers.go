@@ -50,5 +50,11 @@ func parseSidecarContainerImage(pod *corev1.Pod) (string, error) {
 		pod.Spec.Containers = pod.Spec.Containers[:len(pod.Spec.Containers)-1]
 	}
 
+	// Remove any remaining mentions of gke-gcsfuse-sidecar from init container list.
+	if index, present := containerPresent(pod.Spec.InitContainers, SidecarContainerName); present {
+		copy(pod.Spec.InitContainers[index:], pod.Spec.InitContainers[index+1:])
+		pod.Spec.InitContainers = pod.Spec.InitContainers[:len(pod.Spec.InitContainers)-1]
+	}
+
 	return image, nil
 }
