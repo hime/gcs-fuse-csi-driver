@@ -216,3 +216,5 @@ e2e-test:
 
 perf-test:
 	make e2e-test E2E_TEST_USE_MANAGED_DRIVER=true E2E_TEST_GINKGO_TIMEOUT=3h E2E_TEST_SKIP= E2E_TEST_FOCUS=should.succeed.in.performance.test E2E_TEST_GINKGO_FLAKE_ATTEMPTS=1
+clean:
+	rm -r ./bin/
