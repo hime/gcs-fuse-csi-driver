@@ -94,14 +94,15 @@ func (si *SidecarInjector) injectMetadataPrefetchSidecarContainer(pod *corev1.Po
 	var containerSpec corev1.Container
 	var index int
 
-	// Let's check our sidecar is not present anywhere before injecting.
-	// This means we wont support the privately hosted sidecar image feature for this sidecar.
-	_, presentInContainerList := containerPresent(pod.Spec.Containers, SidecarMetadataPrefetchName)
-	_, presentInInitContainerList := containerPresent(pod.Spec.InitContainers, SidecarMetadataPrefetchName)
-	if presentInContainerList || presentInInitContainerList {
-		klog.Infof(`%s sidecar is already injected in pod "%s", skipping injection...`, SidecarMetadataPrefetchName, pod.Name)
+	// We allow sidecar to be present on regular container list to support
+	// Privately Hosted Sidecar Image feature for clusters running with limited internet access.
+	privateMetadataPrefetchSidecarImage, err := ParseSidecarContainerImage(&pod.Spec, SidecarMetadataPrefetchName)
+	if err != nil {
+		klog.Errorf("failed to get privately hosted metadata prefetch image... skipping injection.")
+	}
 
-		return
+	if privateMetadataPrefetchSidecarImage != "" {
+		config.MetadataContainerImage = privateMetadataPrefetchSidecarImage
 	}
 
 	if injectAsNativeSidecar {
@@ -118,6 +119,7 @@ func (si *SidecarInjector) injectMetadataPrefetchSidecarContainer(pod *corev1.Po
 		return
 	}
 
+	// This should not happen as we always inject the sidecar after injecting our primary gcsfuse sidecar.
 	if index == 0 {
 		klog.Warning("gke-gcsfuse-sidecar not found when attempting to inject metadata prefetch sidecar... skipping injection")
 

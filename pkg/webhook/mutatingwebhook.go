@@ -94,7 +94,7 @@ func (si *SidecarInjector) Handle(_ context.Context, req admission.Request) admi
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	if image, err := parseSidecarContainerImage(pod); err == nil {
+	if image, err := ParseSidecarContainerImage(&pod.Spec, SidecarContainerName); err == nil {
 		if image != "" {
 			config.ContainerImage = image
 		}

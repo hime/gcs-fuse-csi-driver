@@ -45,27 +45,29 @@ func ParseBool(str string) (bool, error) {
 //   - removes the container definition from the container list.
 //   - remove any mentions of "gke-gcsfuse-sidecar" from initContainer list.
 //   - return image
-func parseSidecarContainerImage(pod *corev1.Pod) (string, error) {
+//
+// Note: This methos MUST delete all containers using containerName in the Pod Spec.
+func ParseSidecarContainerImage(podSpec *corev1.PodSpec, containerName string) (string, error) {
 	var image string
 
-	// Find container named "gke-gcsfuse-sidecar" (SidecarContainerName), extract its image, and remove from list.
-	if index, present := containerPresent(pod.Spec.Containers, SidecarContainerName); present {
-		image = pod.Spec.Containers[index].Image
+	// Find container named "gke-gcsfuse-sidecar" (sidecarContainerName), extract its image, and remove from list.
+	if index, present := containerPresent(podSpec.Containers, containerName); present {
+		image = podSpec.Containers[index].Image
+
+		if image != "" {
+			copy(podSpec.Containers[index:], podSpec.Containers[index+1:])
+			podSpec.Containers = podSpec.Containers[:len(podSpec.Containers)-1]
+		}
 
 		if _, _, _, err := parsers.ParseImageName(image); err != nil {
 			return "", fmt.Errorf("could not parse input image: %q, error: %w", image, err)
 		}
-
-		if image != "" {
-			copy(pod.Spec.Containers[index:], pod.Spec.Containers[index+1:])
-			pod.Spec.Containers = pod.Spec.Containers[:len(pod.Spec.Containers)-1]
-		}
 	}
 
 	// Remove any mention of gke-gcsfuse-sidecar from init container list.
-	if index, present := containerPresent(pod.Spec.InitContainers, SidecarContainerName); present {
-		copy(pod.Spec.InitContainers[index:], pod.Spec.InitContainers[index+1:])
-		pod.Spec.InitContainers = pod.Spec.InitContainers[:len(pod.Spec.InitContainers)-1]
+	if index, present := containerPresent(podSpec.InitContainers, containerName); present {
+		copy(podSpec.InitContainers[index:], podSpec.InitContainers[index+1:])
+		podSpec.InitContainers = podSpec.InitContainers[:len(podSpec.InitContainers)-1]
 	}
 
 	return image, nil

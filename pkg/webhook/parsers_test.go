@@ -334,7 +334,7 @@ func TestParseSidecarContainerImage(t *testing.T) {
 	for _, tc := range testCases {
 		pod := tc.pod
 
-		image, err := parseSidecarContainerImage(&pod)
+		image, err := ParseSidecarContainerImage(&pod.Spec, SidecarContainerName)
 		if image != tc.expectedImage {
 			t.Errorf(`unexpected image: want: "%s" but got: "%s"`, tc.expectedImage, image)
 		}
