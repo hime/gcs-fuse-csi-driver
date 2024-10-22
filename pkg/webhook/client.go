@@ -30,7 +30,7 @@ func (si *SidecarInjector) IsPreprovisionCSIVolume(csiDriver string, pvc *corev1
 	}
 
 	if pvc == nil {
-		return false, nil, errors.New("failed to check IsPreprovisionCSIVolume, pvsi is nil")
+		return false, nil, errors.New("failed to check IsPreprovisionCSIVolume, pvc is nil")
 	}
 
 	if pvc.Spec.VolumeName == "" {

@@ -28,6 +28,25 @@ import (
 
 const IstioSidecarName = "istio-proxy"
 
+func (si *SidecarInjector) injectAsNativeSidecar(pod *corev1.Pod) (bool, error) {
+	supportsNativeSidecar, err := si.supportsNativeSidecar()
+	if err != nil {
+		return false, fmt.Errorf("failed to determine native sidecar injection: %w", err)
+	}
+
+	nativeSidecarEnabled := true
+	if enable, ok := pod.Annotations[GcsFuseNativeSidecarEnableAnnotation]; ok {
+		parsedAnnotation, err := ParseBool(enable)
+		if err != nil {
+			klog.Errorf("failed to parse enableNativeSidecar annotation: %v", err)
+		} else {
+			nativeSidecarEnabled = parsedAnnotation
+		}
+	}
+
+	return nativeSidecarEnabled && supportsNativeSidecar, nil
+}
+
 func (si *SidecarInjector) supportsNativeSidecar() (bool, error) {
 	if si.ServerVersion != nil && !si.ServerVersion.AtLeast(minimumSupportedVersion) {
 		return false, nil
@@ -63,24 +82,15 @@ func (si *SidecarInjector) supportsNativeSidecar() (bool, error) {
 	return supportsNativeSidecar, nil
 }
 
-func injectSidecarContainer(pod *corev1.Pod, config *Config, supportsNativeSidecar bool) {
-	nativeSidecarEnabled := true
-	if enable, ok := pod.Annotations[GcsFuseNativeSidecarEnableAnnotation]; ok {
-		parsedAnnotation, err := ParseBool(enable)
-		if err != nil {
-			klog.Errorf("failed to parse enableNativeSidecar annotation... ignoring annotation: %v", err)
-		} else {
-			nativeSidecarEnabled = parsedAnnotation
-		}
-	}
-	if supportsNativeSidecar && nativeSidecarEnabled {
+func injectSidecarContainer(pod *corev1.Pod, config *Config, injectAsNativeSidecar bool) {
+	if injectAsNativeSidecar {
 		pod.Spec.InitContainers = insert(pod.Spec.InitContainers, GetNativeSidecarContainerSpec(config), getInjectIndex(pod.Spec.InitContainers))
 	} else {
 		pod.Spec.Containers = insert(pod.Spec.Containers, GetSidecarContainerSpec(config), getInjectIndex(pod.Spec.Containers))
 	}
 }
 
-func (si *SidecarInjector) injectMetadataPrefetchSidecarContainer(pod *corev1.Pod, config *Config, supportsNativeSidecar bool) {
+func (si *SidecarInjector) injectMetadataPrefetchSidecarContainer(pod *corev1.Pod, config *Config, injectAsNativeSidecar bool) {
 	var containerSpec corev1.Container
 	var index int
 
@@ -94,7 +104,7 @@ func (si *SidecarInjector) injectMetadataPrefetchSidecarContainer(pod *corev1.Po
 		return
 	}
 
-	if supportsNativeSidecar {
+	if injectAsNativeSidecar {
 		containerSpec = si.GetNativeMetadataPrefetchSidecarContainerSpec(pod, config)
 		index = getInjectIndexAfterContainer(pod.Spec.InitContainers, SidecarContainerName)
 	} else {
@@ -114,7 +124,7 @@ func (si *SidecarInjector) injectMetadataPrefetchSidecarContainer(pod *corev1.Po
 		return
 	}
 
-	if supportsNativeSidecar {
+	if injectAsNativeSidecar {
 		pod.Spec.InitContainers = insert(pod.Spec.InitContainers, containerSpec, index)
 	} else {
 		pod.Spec.Containers = insert(pod.Spec.Containers, containerSpec, index)

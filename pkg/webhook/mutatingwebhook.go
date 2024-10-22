@@ -103,20 +103,20 @@ func (si *SidecarInjector) Handle(_ context.Context, req admission.Request) admi
 	}
 
 	// Check support for native sidecar.
-	supportsNativeSidecar, err := si.supportsNativeSidecar()
+	injectAsNativeSidecar, err := si.injectAsNativeSidecar(pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("failed to verify native sidecar support: %w", err))
 	}
 
 	// Inject container.
-	injectSidecarContainer(pod, config, supportsNativeSidecar)
+	injectSidecarContainer(pod, config, injectAsNativeSidecar)
 	pod.Spec.Volumes = append(GetSidecarContainerVolumeSpec(pod.Spec.Volumes...), pod.Spec.Volumes...)
 
 	// Log pod mutation.
 	LogPodMutation(pod, config)
 
 	// Inject metadata prefetch sidecar.
-	si.injectMetadataPrefetchSidecarContainer(pod, config, supportsNativeSidecar)
+	si.injectMetadataPrefetchSidecarContainer(pod, config, injectAsNativeSidecar)
 
 	marshaledPod, err := json.Marshal(pod)
 	if err != nil {
