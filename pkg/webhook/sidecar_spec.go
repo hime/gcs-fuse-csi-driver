@@ -36,6 +36,9 @@ const (
 	SidecarContainerCacheVolumeName       = "gke-gcsfuse-cache"
 	SidecarContainerCacheVolumeMountPath  = "/gcsfuse-cache"
 
+	// Webhook relevant volume attributes.
+	gcsFuseMetadataPrefetchOnMountVolumeAttribute = "gcsfuseMetadataPrefetchOnMount"
+
 	// See the nonroot user discussion: https://github.com/GoogleContainerTools/distroless/issues/443
 	NobodyUID = 65534
 	NobodyGID = 65534
@@ -122,29 +125,35 @@ func GetSidecarContainerSpec(c *Config) corev1.Container {
 	return container
 }
 
-func (si *SidecarInjector) GetNativeMetadataPrefetchSidecarContainerSpec(pod *corev1.Pod, c *Config) corev1.Container {
-	container := si.GetMetadataPrefetchSidecarContainerSpec(pod, c)
+func (si *SidecarInjector) GetNativeMetadataPrefetchSidecarContainerSpec(pod *corev1.Pod, image string) corev1.Container {
+	container := si.GetMetadataPrefetchSidecarContainerSpec(pod, image)
 	container.Env = append(container.Env, corev1.EnvVar{Name: "NATIVE_SIDECAR", Value: "TRUE"})
 	container.RestartPolicy = ptr.To(corev1.ContainerRestartPolicyAlways)
 
 	return container
 }
 
-func getMetadataPrefetchContainerResources() (corev1.ResourceList, corev1.ResourceList) {
-	c := &Config{
+func getMetadataPrefetchConfig(image string) *Config {
+	return &Config{
 		CPURequest:              resource.MustParse("10m"),
 		CPULimit:                resource.MustParse("50m"),
 		MemoryRequest:           resource.MustParse("10Mi"),
-		MemoryLimit:             resource.MustParse("100Mi"),
+		MemoryLimit:             resource.MustParse("10Mi"),
 		EphemeralStorageRequest: resource.MustParse("10Mi"),
 		EphemeralStorageLimit:   resource.MustParse("10Mi"),
+		MetadataContainerImage:  image,
 	}
-
-	return prepareResourceList(c)
 }
 
-func (si *SidecarInjector) GetMetadataPrefetchSidecarContainerSpec(pod *corev1.Pod, c *Config) corev1.Container {
-	limits, requests := getMetadataPrefetchContainerResources()
+func (si *SidecarInjector) GetMetadataPrefetchSidecarContainerSpec(pod *corev1.Pod, image string) corev1.Container {
+	if pod == nil {
+		klog.Warning("failed to get metadata prefetch container spec: pod is nil")
+
+		return corev1.Container{}
+	}
+
+	c := getMetadataPrefetchConfig(image)
+	limits, requests := prepareResourceList(c)
 
 	// The sidecar container follows Restricted Pod Security Standard,
 	// see https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
@@ -152,22 +161,6 @@ func (si *SidecarInjector) GetMetadataPrefetchSidecarContainerSpec(pod *corev1.P
 		Name:            SidecarMetadataPrefetchName,
 		Image:           c.MetadataContainerImage,
 		ImagePullPolicy: corev1.PullPolicy(c.ImagePullPolicy),
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{
-					corev1.Capability("ALL"),
-				},
-			},
-			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-			RunAsNonRoot:   ptr.To(true),
-			RunAsUser:      ptr.To(int64(NobodyUID)),
-			RunAsGroup:     ptr.To(int64(NobodyGID)),
-		},
-		Args: []string{
-			"--v=5",
-		},
 		Resources: corev1.ResourceRequirements{
 			Limits:   limits,
 			Requests: requests,
@@ -177,9 +170,8 @@ func (si *SidecarInjector) GetMetadataPrefetchSidecarContainerSpec(pod *corev1.P
 
 	for _, v := range pod.Spec.Volumes {
 		if b, volumeAttributes, _ := si.isGcsFuseCSIVolume(v, pod.Namespace); b {
-			enableMetaPrefetchRaw, ok := volumeAttributes["gcsfuseMetadataPrefetchOnMount"]
-			// We disable metadata prefetch by default, so we
-			// skip injection of volume mount when not set.
+			enableMetaPrefetchRaw, ok := volumeAttributes[gcsFuseMetadataPrefetchOnMountVolumeAttribute]
+			// We disable metadata prefetch by default, so we skip injection of volume mount when not set.
 			if !ok {
 				continue
 			}

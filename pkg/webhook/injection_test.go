@@ -19,6 +19,7 @@ package webhook
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -341,5 +342,704 @@ func TestGetInjectIndex(t *testing.T) {
 		if idx != tc.idx {
 			t.Errorf(`expected injection to be at index "%d" but got "%d"`, tc.idx, idx)
 		}
+	}
+}
+
+func TestInjectMetadataPrefetchSidecar(t *testing.T) {
+	t.Parallel()
+
+	limits, requests := prepareResourceList(getMetadataPrefetchConfig("fake-image"))
+
+	testCases := []struct {
+		testName      string
+		pod           *corev1.Pod
+		config        Config
+		nativeSidecar bool
+		expectedPod   *corev1.Pod
+	}{
+		{
+			testName: "no injection",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "one",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "one",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "fuse sidecar present, no injection",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: SidecarContainerName,
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "gke-gcsfuse-sidecar",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "fuse sidecar present, no injection due to different driver",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: SidecarContainerName,
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: "other-csi",
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "false",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "gke-gcsfuse-sidecar",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: "other-csi",
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "false",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "fuse sidecar present, no injection with volume annotation",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: SidecarContainerName,
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "false",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "gke-gcsfuse-sidecar",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "false",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		{
+			testName: "fuse sidecar not present, privately hosted image",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  SidecarMetadataPrefetchName,
+							Image: "my-private-image",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "fuse sidecar present, injection successful",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: SidecarContainerName,
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "gke-gcsfuse-sidecar",
+						},
+						{
+							Name: SidecarMetadataPrefetchName,
+							Resources: corev1.ResourceRequirements{
+								Requests: requests,
+								Limits:   limits,
+							},
+							VolumeMounts: []corev1.VolumeMount{{Name: "my-volume", ReadOnly: true, MountPath: "/volumes/my-volume"}},
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "fuse sidecar present with many volumes, injection successful",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: SidecarContainerName,
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+						{
+							Name: "my-other-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "false",
+									},
+								},
+							},
+						},
+						{
+							Name: "other-csi-vol",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: "other-csi",
+								},
+							},
+						},
+						{
+							Name: "my-emptydir",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "gke-gcsfuse-sidecar",
+						},
+						{
+							Name: SidecarMetadataPrefetchName,
+							Resources: corev1.ResourceRequirements{
+								Requests: requests,
+								Limits:   limits,
+							},
+							VolumeMounts: []corev1.VolumeMount{{Name: "my-volume", ReadOnly: true, MountPath: "/volumes/my-volume"}},
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+						{
+							Name: "my-other-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "false",
+									},
+								},
+							},
+						},
+						{
+							Name: "other-csi-vol",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: "other-csi",
+								},
+							},
+						},
+						{
+							Name: "my-emptydir",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "fuse sidecar present & using privately hosted image, injection successful",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: SidecarContainerName,
+						},
+						{
+							Name:  SidecarMetadataPrefetchName,
+							Image: "my-private-image",
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "gke-gcsfuse-sidecar",
+						},
+						{
+							Name: SidecarMetadataPrefetchName,
+							Resources: corev1.ResourceRequirements{
+								Requests: requests,
+								Limits:   limits,
+							},
+							Image:        "my-private-image",
+							VolumeMounts: []corev1.VolumeMount{{Name: "my-volume", ReadOnly: true, MountPath: "/volumes/my-volume"}},
+						},
+						{
+							Name: "two",
+						},
+						{
+							Name: "three",
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name: "init-one",
+						},
+						{
+							Name: "init-two",
+						},
+						{
+							Name: "init-three",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "my-volume",
+							VolumeSource: corev1.VolumeSource{
+								CSI: &corev1.CSIVolumeSource{
+									Driver: gcsFuseCsiDriverName,
+									VolumeAttributes: map[string]string{
+										gcsFuseMetadataPrefetchOnMountVolumeAttribute: "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.testName, func(t *testing.T) {
+			t.Parallel()
+			si := SidecarInjector{}
+			si.injectMetadataPrefetchSidecarContainer(tc.pod, &tc.config, tc.nativeSidecar)
+			if !reflect.DeepEqual(tc.pod, tc.expectedPod) {
+				t.Errorf(`failed to run %s, expected: "%v", but got "%v". Diff: %s`, tc.testName, tc.expectedPod, tc.pod, cmp.Diff(tc.expectedPod, tc.pod))
+			}
+		})
 	}
 }
