@@ -115,7 +115,7 @@ func (m *Mounter) Mount(source string, target string, fstype string, options []s
 
 	if len(sysfsBDI) != 0 {
 		go func() {
-			// updateReadAheadAndMaxRatio may hang until the file descriptor (fd) is either consumed or canceled.
+			// updateSysfsConfig may hang until the file descriptor (fd) is either consumed or canceled.
 			// It will succeed once dfuse finishes the mount process, or it will fail if dfuse fails
 			// or the mount point is cleaned up due to mounting failures.
 			if err := updateSysfsConfig(target, sysfsBDI); err != nil {
@@ -156,7 +156,7 @@ func (m *Mounter) Mount(source string, target string, fstype string, options []s
 // updateSysfsConfig modifies the kernel page cache settings based on the read_ahead_kb or max_ratio provided in the mountOption,
 // and verifies that the values are successfully updated after the operation completes.
 func updateSysfsConfig(targetMountPath string, sysfsBDI map[string]int64) error {
-	start := time.Now()
+	// Command will hang until mount completes.
 	cmd := exec.Command("mountpoint", "-d", targetMountPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -173,36 +173,28 @@ func updateSysfsConfig(targetMountPath string, sysfsBDI map[string]int64) error 
 	klog.Infof("Output of mountpoint for target mount path %s: %s", targetMountPath, output)
 
 	for key, value := range sysfsBDI {
-		// Update the target value.
-		sysClassEchoCmd := fmt.Sprintf("echo %d > /sys/class/bdi/%s/%s", value, outputStr, key)
-		klog.V(4).Infof("Executing command %s", sysClassEchoCmd)
-		cmd := exec.Command("sh", "-c", sysClassEchoCmd)
-		_, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to execute command %q: %w", sysClassEchoCmd, err)
-		}
+		writeErr := func(targetDevice, key string) error {
+			// Update the target value.
+			sysfsBDIPath := filepath.Join("/sys/class/bdi/", targetDevice, key)
+			file, err := os.OpenFile(sysfsBDIPath, os.O_WRONLY|os.O_TRUNC, 0644)
+			if err != nil {
+				return fmt.Errorf("failed to open file %q: %w", sysfsBDIPath, err)
+			}
+			defer file.Close()
 
-		// Verify updated value.
-		sysClassCatCmd := fmt.Sprintf("cat /sys/class/bdi/%s/%s", outputStr, key)
-		klog.V(4).Infof("Executing command %s", sysClassCatCmd)
-		cmd = exec.Command("sh", "-c", sysClassCatCmd)
-		op, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to execute command %q: %w", sysClassCatCmd, err)
-		}
-		klog.V(4).Infof("Output of %q : %s", sysClassCatCmd, op)
+			_, err = file.Write([]byte(fmt.Sprintf("%d\n", value)))
 
-		opStr := strings.TrimSpace(string(op))
-		updatedVal, err := strconv.ParseInt(opStr, 10, 0)
-		if err != nil {
-			return fmt.Errorf("invalid %s: %w", key, err)
-		}
-		if updatedVal != value {
-			return fmt.Errorf("mismatch in %s, expected %d, got %d", key, value, updatedVal)
-		}
+			if err != nil {
+				return fmt.Errorf("failed to write to file %q: %w", "echo", err)
+			}
 
-		currentTime := time.Now()
-		klog.Infof("Successfully set %s to %d for mountPoint %s at '%v' (elapsed time: %v)", key, value, targetMountPath, currentTime, time.Since(start))
+			klog.Infof("Updated %s to %d", sysfsBDIPath, value)
+
+			return nil
+		}(outputStr, key)
+		if writeErr != nil {
+			return err
+		}
 	}
 
 	return nil
