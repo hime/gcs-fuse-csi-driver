@@ -24,9 +24,14 @@ scenario: local-ssd
 # nodeType: n2-standard-96
 
 # FIO container resource limits. Set according to machine type, goal is usually to schedule only one pod per node in FIO.
-resourceLimits:
-  cpu: 100
-  memory: 400Gi
+resources:
+  requests:
+    # cpu: 30
+    cpu: 60
+    memory: 10Gi
+  limits:
+    cpu: 60
+    memory: 40Gi
 
 fio:
   # File configs
@@ -35,14 +40,14 @@ fio:
 
   # Read behavior configs
   readType: read
-  direct: 0 # Skip page cache
+  direct: 0 # Skip page cache (1 is true)
   
   # Thread configs
   numJobs: 50 # Number of threads
   filesPerThread: "20000"
 
   # Epoch configs
-  epochs: 1 # Number of reruns in same instance/pod.
+  epochs: 4 # Number of reruns in same instance/pod.
   pauseBetweenEpochs: 20
 
 gcsfuse:

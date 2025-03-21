@@ -55,10 +55,9 @@ for scenario in data['scenarios']:
     opts="\\,".join(scenario['mountOptions'])
     scenarios.append((scenario['name'], scenario['volumeAttributes'], opts))
 
-
 # Apply all combinations to helm chart.
 for bucketName, fileSize, blockSize in storage_layouts:    
-    for readType in ["randread"]:
+    for readType in data['readTypes']:
         for scenario_name, volume_attributes, mountOptions in scenarios:
 
             if readType == "randread" and fileSize in ["64K", "128K"]:
@@ -77,6 +76,7 @@ for bucketName, fileSize, blockSize in storage_layouts:
                             f"--set scenario={scenario_name}",
                             f"--set fio.readType={readType}",
                             f"--set fio.fileSize={fileSize}",
+                            f"--set fio.blockSize={blockSize}",
                             f"--set gcsfuse.mountOptions={mountOptions}"])
 
                 for d in volume_attributes:
@@ -91,5 +91,4 @@ for bucketName, fileSize, blockSize in storage_layouts:
                     commands.append("--set fio.filesPerThread=1000")
             helm_command = " ".join(commands)
 
-            # print(helm_command)
             run_command(helm_command)

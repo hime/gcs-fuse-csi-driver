@@ -24,7 +24,7 @@ metadata:
 spec:
   restartPolicy: Never
   nodeSelector:
-    cloud.google.com/gke-ephemeral-storage-local-ssd: "true"
+    # cloud.google.com/gke-ephemeral-storage-local-ssd: "true"
   containers:
   - name: fio-tester
     image: {{ .Values.image }}
@@ -32,11 +32,11 @@ spec:
       privileged: true
     resources:
       limits:
-        cpu: {{ .Values.resourceLimits.cpu }}
-        memory: {{ .Values.resourceLimits.memory }}
+        cpu: {{ .Values.resources.limits.cpu }}
+        memory: {{ .Values.resources.limits.memory }}
       requests:
-        cpu: "30"
-        memory: 300Gi
+        cpu:  {{ .Values.resources.requests.cpu }}
+        memory:  {{ .Values.resources.requests.memory }}
     command:
       - "/bin/sh"
       - "-c"

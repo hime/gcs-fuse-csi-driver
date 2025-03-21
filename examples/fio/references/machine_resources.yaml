@@ -1,0 +1,23 @@
+machines: 
+- name: "c4-standard-96"
+  machineDesc: "-1"
+  # Goal is to set resources to only deploy 1 pod per node.
+  resources:
+    requests:
+      cpu: 80
+      memory: 80Gi
+    limits:
+      cpu: 90
+      memory: 90Gi
+- name: "-1"
+  machineDesc: "-1"
+  resources:
+    # requests:
+    limits:
+      cpu: 100
+      memory: 400Gi
+
+
+# TODO: i think the original goal was to schedule 1 pod per node,
+# but only the workload container memory was set. we want to 
+# apply minimums for sidecar too so that its not constraned and total pod usage > 50%

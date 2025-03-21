@@ -1,5 +1,5 @@
 run_tests:
-	python manage_tests.py run
+	python run_tests.py run
 
 delete_tests:
-	python manage_tests.py delete
+	python run_tests.py delete
