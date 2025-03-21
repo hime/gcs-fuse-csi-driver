@@ -19,22 +19,33 @@
 
 image: ubuntu:24.04
 bucketName: gke-dlio-test-data
+resultsBucketName: jaimebz-bucket
 scenario: local-ssd
-nodeType: n2-standard-96
+# nodeType: n2-standard-96
 
+# FIO container resource limits. Set according to machine type, goal is usually to schedule only one pod per node in FIO.
 resourceLimits:
   cpu: 100
   memory: 400Gi
 
 fio:
-  readType: read
+  # File configs
   fileSize: 64K
   blockSize: 64K
+
+  # Read behavior configs
+  readType: read
+  direct: 0 # Skip page cache
+  
+  # Thread configs
+  numJobs: 50 # Number of threads
   filesPerThread: "20000"
 
+  # Epoch configs
+  epochs: 1 # Number of reruns in same instance.
+  pauseBetweenEpochs: 20
+
 gcsfuse:
-  metadataCacheTTLSeconds: "6048000"
-  metadataStatCacheCapacity: "-1"
-  metadataTypeCacheCapacity: "-1"
-  fileCacheCapacity: "-1"
-  fileCacheForRangeRead: "true"
+  gcsfuseMetadataPrefetchOnMount: "false"
+  disableMetrics: "true"
+  mountOptions: "implicit-dirs,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,metadata-cache:ttl-secs:6048000,file-cache:max-size-mb:-1,file-cache:cache-file-for-range-read:-1"

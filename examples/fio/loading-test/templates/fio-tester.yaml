@@ -25,7 +25,6 @@ spec:
   restartPolicy: Never
   nodeSelector:
     cloud.google.com/gke-ephemeral-storage-local-ssd: "true"
-    node.kubernetes.io/instance-type: {{ .Values.nodeType }}
   containers:
   - name: fio-tester
     image: {{ .Values.image }}
@@ -100,18 +99,44 @@ spec:
         offset_increment=1%
         EOF
         {{ else }}
-        wget -O $filename https://raw.githubusercontent.com/GoogleCloudPlatform/gcsfuse/read_cache_release/perfmetrics/scripts/job_files/read_cache_load_test.fio
+        cat > $filename << EOF
+        ; -- use nrfiles and rw to CLI args to control readtype and number of files --
+        [global]
+        ioengine=libaio
+        direct=${DIRECT} # Skip page cache (0 is false, 1 is true)
+        fadvise_hint=0
+        iodepth=64
+        invalidate=1
+        nrfiles=${NRFILES} 
+        thread=1
+        openfiles=1
+        group_reporting=1
+        create_serialize=0
+        allrandrepeat=0
+        file_service_type=random
+        numjobs=${NUMJOBS} # Number_of_threads
+        filename_format=$jobname.$jobnum/$filenum
+
+        [Workload]
+        directory=${DIR}  # Directory where bucket is mounted.
+        bs=${BLOCK_SIZE} # BLOCK_SIZE (in K, M, G) (e.g. 20K) 
+        filesize=${FILE_SIZE} # FILE_SIZE (in K, M, G) (e.g. 10K)
+        rw=${READ_TYPE} # READ_TYPE (read, randread)
+        EOF
         {{ end }}
 
         echo "Setup default values..."
-        epoch=4
+        epoch={{ .Values.fio.epochs }}
         no_of_files_per_thread={{ .Values.fio.filesPerThread }}
+        skip_page_cache={{ .Values.fio.direct }}
         read_type={{ .Values.fio.readType }}
-        pause_in_seconds=20
+        pause_in_seconds={{ .Values.fio.pauseBetweenEpochs }}
         block_size={{ .Values.fio.blockSize }}
         file_size={{ .Values.fio.fileSize }}
-        num_of_threads=50
+        num_of_threads={{ .Values.fio.numJobs }}
         workload_dir=/data
+        test_name=fio-tester-{{ .Values.fio.readType }}-{{ lower .Values.fio.fileSize }}-{{ lower .Values.fio.blockSize }}-{{ .Values.scenario }}
+        results_path=/results/$test_name/{{ .Values.scenario }}/$read_type
 
         # Cleaning the pagecache, dentries and inode cache before the starting the workload.
         echo "Drop page cache..."
@@ -125,12 +150,12 @@ spec:
         time ls -R $workload_dir 1> /dev/null
 
         echo "Run fio tests..."
-        mkdir -p /data/fio-output/{{ .Values.scenario }}/$read_type
+        mkdir -p $results_path
         for i in $(seq $epoch); do
 
           echo "[Epoch ${i}] start time:" `date +%s`
           free -mh # Memory usage before workload start.
-          NUMJOBS=$num_of_threads NRFILES=$no_of_files_per_thread FILE_SIZE=$file_size BLOCK_SIZE=$block_size READ_TYPE=$read_type DIR=$workload_dir fio ${filename} --alloc-size=1048576 --output-format=json --output="/data/fio-output/{{ .Values.scenario }}/${read_type}/epoch${i}.json"
+          DIRECT=$skip_page_cache NUMJOBS=$num_of_threads NRFILES=$no_of_files_per_thread FILE_SIZE=$file_size BLOCK_SIZE=$block_size READ_TYPE=$read_type DIR=$workload_dir fio ${filename} --alloc-size=1048576 --output-format=json --output="$results_path/epoch${i}.json"
           free -mh # Memory usage after workload completion.
           echo "[Epoch ${i}] end time:" `date +%s`
 
@@ -148,7 +173,7 @@ spec:
         done
         
         {{ if eq .Values.scenario "local-ssd" }}
-        gsutil -m cp -R /data/fio-output/local-ssd gs://{{ .Values.bucketName }}/fio-output
+        gsutil -m cp -R $results_path gs://{{ .Values.bucketName }}
         {{ end }}
         
         echo "fio job completed!"
@@ -156,7 +181,10 @@ spec:
     - name: dshm
       mountPath: /dev/shm
     - name: data-vol
+      readOnly: true
       mountPath: /data
+    - name: results-volume
+      mountPath: /results
   volumes:
   - name: dshm
     emptyDir:
@@ -164,26 +192,20 @@ spec:
   - name: data-vol
   {{- if eq .Values.scenario "local-ssd" }}
     emptyDir: {}
-  {{- else if eq .Values.scenario "gcsfuse-file-cache" }}
-    csi:
-      driver: gcsfuse.csi.storage.gke.io
-      volumeAttributes:
-        bucketName: {{ .Values.bucketName }}
-        metadataCacheTTLSeconds: "{{ .Values.gcsfuse.metadataCacheTTLSeconds }}"
-        metadataTypeCacheCapacity: "{{ .Values.gcsfuse.metadataTypeCacheCapacity }}"
-        metadataStatCacheCapacity: "{{ .Values.gcsfuse.metadataStatCacheCapacity }}"
-        fileCacheCapacity: "{{ .Values.gcsfuse.fileCacheCapacity }}"
-        fileCacheForRangeRead: "true"
-        gcsfuseLoggingSeverity: "debug"
-        mountOptions: implicit-dirs
   {{- else }}
     csi:
       driver: gcsfuse.csi.storage.gke.io
       volumeAttributes:
         bucketName: {{ .Values.bucketName }}
-        metadataCacheTTLSeconds: "{{ .Values.gcsfuse.metadataCacheTTLSeconds }}"
-        metadataTypeCacheCapacity: "{{ .Values.gcsfuse.metadataTypeCacheCapacity }}"
-        metadataStatCacheCapacity: "{{ .Values.gcsfuse.metadataStatCacheCapacity }}"
-        gcsfuseLoggingSeverity: "debug"
-        mountOptions: implicit-dirs
+        gcsfuseLoggingSeverity: "trace"
+        mountOptions: "{{ .Values.gcsfuse.mountOptions }}"
+        gcsfuseMetadataPrefetchOnMount: "{{ .Values.gcsfuse.gcsfuseMetadataPrefetchOnMount }}"
+        disableMetrics:  "{{ .Values.gcsfuse.disableMetrics }}"
   {{- end }}
+  - name: results-volume
+    csi:
+      driver: gcsfuse.csi.storage.gke.io
+      volumeAttributes:
+        bucketName:  {{ .Values.resultsBucketName }}
+        mountOptions: "implicit-dirs"
+
