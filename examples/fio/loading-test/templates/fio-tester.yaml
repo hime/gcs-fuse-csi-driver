@@ -197,10 +197,11 @@ spec:
       driver: gcsfuse.csi.storage.gke.io
       volumeAttributes:
         bucketName: {{ .Values.bucketName }}
-        gcsfuseLoggingSeverity: "trace"
         mountOptions: "{{ .Values.gcsfuse.mountOptions }}"
-        gcsfuseMetadataPrefetchOnMount: "{{ .Values.gcsfuse.gcsfuseMetadataPrefetchOnMount }}"
-        disableMetrics:  "{{ .Values.gcsfuse.disableMetrics }}"
+        # Load volumeAttributes from values.yaml
+        {{- range $key, $value := .Values.gcsfuse.volumeAttributes }}
+        {{ $key }}: "{{ $value }}"
+        {{- end }}
   {{- end }}
   - name: results-volume
     csi:

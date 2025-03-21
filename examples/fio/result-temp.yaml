@@ -1,0 +1,267 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    gke-gcsfuse/volumes: "true"
+    meta.helm.sh/release-name: fio-loading-test-100m-randread-gcsfuse-file-cache
+    meta.helm.sh/release-namespace: default
+  creationTimestamp: "2025-03-21T03:51:50Z"
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  name: fio-tester-randread-100m-64k-gcsfuse-file-cache
+  namespace: default
+  resourceVersion: "19926860"
+  uid: cdc2875c-e907-429a-98fc-dafe19e3877b
+spec:
+  containers:
+  - command:
+    - /bin/sh
+    - -c
+    - "echo \"Install dependencies...\"\napt-get update\napt-get install -y libaio-dev
+      gcc make git time wget\n\n\n\n# We are building fio from source because of the
+      issue: https://github.com/axboe/fio/issues/1668.\n# The sed command below is
+      to address internal bug b/309563824.\n# As recorded in this bug, fio by-default
+      supports\n# clat percentile values to be calculated accurately upto only\n#
+      2^(FIO_IO_U_PLAT_GROUP_NR + 5) ns = 17.17 seconds.\n# (with default value of
+      FIO_IO_U_PLAT_GROUP_NR = 29). This change increases it upto 32, to allow\n#
+      latencies upto 137.44s to be calculated accurately.\ngit clone -b fio-3.36 https://github.com/axboe/fio.git\ncd
+      fio\nsed -i 's/define \\+FIO_IO_U_PLAT_GROUP_NR \\+\\([0-9]\\+\\)/define FIO_IO_U_PLAT_GROUP_NR
+      32/g' stat.h\n./configure && make && make install\ncd ..\n\necho \"Preparing
+      fio config file...\"\nfilename=/read_cache_load_test.fio\n\ncat > $filename
+      << EOF\n; -- use nrfiles and rw to CLI args to control readtype and number of
+      files --\n[global]\nioengine=libaio\ndirect=${DIRECT} # Skip page cache (0 is
+      false, 1 is true)\nfadvise_hint=0\niodepth=64\ninvalidate=1\nnrfiles=${NRFILES}
+      \nthread=1\nopenfiles=1\ngroup_reporting=1\ncreate_serialize=0\nallrandrepeat=0\nfile_service_type=random\nnumjobs=${NUMJOBS}
+      # Number_of_threads\nfilename_format=$jobname.$jobnum/$filenum\n\n[Workload]\ndirectory=${DIR}
+      \ # Directory where bucket is mounted.\nbs=${BLOCK_SIZE} # BLOCK_SIZE (in K,
+      M, G) (e.g. 20K) \nfilesize=${FILE_SIZE} # FILE_SIZE (in K, M, G) (e.g. 10K)\nrw=${READ_TYPE}
+      # READ_TYPE (read, randread)\nEOF\n\n\necho \"Setup default values...\"\nepoch=1\nno_of_files_per_thread=1000\nskip_page_cache=0\nread_type=randread\npause_in_seconds=20\nblock_size=64K\nfile_size=100M\nnum_of_threads=50\nworkload_dir=/data\ntest_name=fio-tester-randread-100m-64k-gcsfuse-file-cache\nresults_path=/results/$test_name/gcsfuse-file-cache/$read_type\n\n#
+      Cleaning the pagecache, dentries and inode cache before the starting the workload.\necho
+      \"Drop page cache...\"\necho 3 > /proc/sys/vm/drop_caches\n\n# Specially for
+      gcsfuse mounted dir: the purpose of this approach is to efficiently\n# populate
+      the gcsfuse metadata cache by utilizing the list call, which internally\n# works
+      like bulk stat call rather than making individual stat calls.\n# And to reduce
+      the logs redirecting the command standard-output to /dev/null.\necho \"List
+      workload dir...\"\ntime ls -R $workload_dir 1> /dev/null\n\necho \"Run fio tests...\"\nmkdir
+      -p $results_path\nfor i in $(seq $epoch); do\n\n  echo \"[Epoch ${i}] start
+      time:\" `date +%s`\n  free -mh # Memory usage before workload start.\n  DIRECT=$skip_page_cache
+      NUMJOBS=$num_of_threads NRFILES=$no_of_files_per_thread FILE_SIZE=$file_size
+      BLOCK_SIZE=$block_size READ_TYPE=$read_type DIR=$workload_dir fio ${filename}
+      --alloc-size=1048576 --output-format=json --output=\"$results_path/epoch${i}.json\"\n
+      \ free -mh # Memory usage after workload completion.\n  echo \"[Epoch ${i}]
+      end time:\" `date +%s`\n\n  # To free pagecache.\n  # Intentionally not clearing
+      dentries and inodes: clearing them\n  # will necessitate the repopulation of
+      the type cache in gcsfuse 2nd epoch onwards.\n  # Since we use \"ls -R workload_dir\"
+      to populate the cache (sort of hack to fill the cache quickly)\n  # efficiently
+      in the first epoch, it does not populate the negative\n  # entry for the stat
+      cache.\n  # So just to stop the execution of  “ls -R workload_dir” command at
+      the start\n  # of every epoch, not clearing the inodes.\n  echo 1 > /proc/sys/vm/drop_caches\n\n
+      \ sleep $pause_in_seconds\ndone\n\n\n\necho \"fio job completed!\"\n"
+    image: ubuntu:24.04
+    imagePullPolicy: IfNotPresent
+    name: fio-tester
+    resources:
+      limits:
+        cpu: "100"
+        memory: 400Gi
+      requests:
+        cpu: "30"
+        memory: 300Gi
+    securityContext:
+      privileged: true
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /dev/shm
+      name: dshm
+    - mountPath: /data
+      name: data-vol
+      readOnly: true
+    - mountPath: /results
+      name: results-volume
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-pwjrt
+      readOnly: true
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  initContainers:
+  - args:
+    - --v=5
+    env:
+    - name: NATIVE_SIDECAR
+      value: "TRUE"
+    image: us-central1-artifactregistry.gcr.io/gke-release/gke-release/gcs-fuse-csi-driver-sidecar-mounter:v1.11.0-gke.0@sha256:8259fbefef30f65ab465a36b0a351205c9dcc29e6b1f707201c7b10a96c3537b
+    imagePullPolicy: IfNotPresent
+    name: gke-gcsfuse-sidecar
+    resources:
+      requests:
+        cpu: 250m
+        ephemeral-storage: 5Gi
+        memory: 256Mi
+    restartPolicy: Always
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+      readOnlyRootFilesystem: true
+      runAsGroup: 65534
+      runAsNonRoot: true
+      runAsUser: 65534
+      seccompProfile:
+        type: RuntimeDefault
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /gcsfuse-tmp
+      name: gke-gcsfuse-tmp
+    - mountPath: /gcsfuse-buffer
+      name: gke-gcsfuse-buffer
+    - mountPath: /gcsfuse-cache
+      name: gke-gcsfuse-cache
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-pwjrt
+      readOnly: true
+  nodeName: gke-a3-cluster-a3-pool-spot-ccf1b887-dbjx
+  nodeSelector:
+    cloud.google.com/gke-ephemeral-storage-local-ssd: "true"
+  preemptionPolicy: PreemptLowerPriority
+  priority: 0
+  restartPolicy: Never
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: default
+  serviceAccountName: default
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  volumes:
+  - emptyDir: {}
+    name: gke-gcsfuse-cache
+  - emptyDir: {}
+    name: gke-gcsfuse-tmp
+  - emptyDir: {}
+    name: gke-gcsfuse-buffer
+  - emptyDir:
+      medium: Memory
+    name: dshm
+  - csi:
+      driver: gcsfuse.csi.storage.gke.io
+      volumeAttributes:
+        bucketName: gke-fio-100mb-50k
+        disableMetrics: "true"
+        gcsfuseLoggingSeverity: trace
+        gcsfuseMetadataPrefetchOnMount: "false"
+        mountOptions: implicit-dirs,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,metadata-cache:ttl-secs:6048000,file-cache:max-size-mb:-1,file-cache:cache-file-for-range-read:-1
+        skipCSIBucketAccessCheck: "false"
+    name: data-vol
+  - csi:
+      driver: gcsfuse.csi.storage.gke.io
+      volumeAttributes:
+        bucketName: jaimebz-bucket
+        mountOptions: implicit-dirs
+    name: results-volume
+  - name: kube-api-access-pwjrt
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2025-03-21T03:51:52Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2025-03-21T03:51:52Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2025-03-21T03:51:55Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2025-03-21T03:51:55Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2025-03-21T03:51:50Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - containerID: containerd://ce4a62a8c97c6e0afeff190d83b7f13f7d105356d9f1138a0e3dbd475e07dbcf
+    image: docker.io/library/ubuntu:24.04
+    imageID: docker.io/library/ubuntu@sha256:72297848456d5d37d1262630108ab308d3e9ec7ed1c3286a32fe09856619a782
+    lastState: {}
+    name: fio-tester
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2025-03-21T03:51:54Z"
+    volumeMounts:
+    - mountPath: /dev/shm
+      name: dshm
+    - mountPath: /data
+      name: data-vol
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /results
+      name: results-volume
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-pwjrt
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 10.128.0.120
+  hostIPs:
+  - ip: 10.128.0.120
+  initContainerStatuses:
+  - containerID: containerd://b2bc021727d683cd6a570f66a3b9282d3ff747c4cabbe5742197eede6ef57632
+    image: sha256:a3b15e8f774c7329421b4cd1d72ee90a8bb1809c2f224d8e370a96d1db12ea06
+    imageID: us-central1-artifactregistry.gcr.io/gke-release/gke-release/gcs-fuse-csi-driver-sidecar-mounter@sha256:8259fbefef30f65ab465a36b0a351205c9dcc29e6b1f707201c7b10a96c3537b
+    lastState: {}
+    name: gke-gcsfuse-sidecar
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2025-03-21T03:51:51Z"
+    volumeMounts:
+    - mountPath: /gcsfuse-tmp
+      name: gke-gcsfuse-tmp
+    - mountPath: /gcsfuse-buffer
+      name: gke-gcsfuse-buffer
+    - mountPath: /gcsfuse-cache
+      name: gke-gcsfuse-cache
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-pwjrt
+      readOnly: true
+      recursiveReadOnly: Disabled
+  phase: Running
+  podIP: 10.24.0.16
+  podIPs:
+  - ip: 10.24.0.16
+  qosClass: Burstable
+  startTime: "2025-03-21T03:51:50Z"

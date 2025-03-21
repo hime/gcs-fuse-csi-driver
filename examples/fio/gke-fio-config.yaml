@@ -1,0 +1,104 @@
+# Copyright 2018 The Kubernetes Authors.
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for unet3d-loading-test.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+userSettings:
+- resultsBucket: "jaimebz-bucket" # Bucket where results are stored.
+
+scenarios:
+- name: gcsfuse-file-cache
+  volumeAttributes:
+  - gcsfuseMetadataPrefetchOnMount: "false"
+  - disableMetrics: "true"
+  mountOptions:
+  - "implicit-dirs"
+  # Metadata cache options.
+  - "metadata-cache:stat-cache-max-size-mb:-1"
+  - "metadata-cache:type-cache-max-size-mb:-1"
+  - "metadata-cache:ttl-secs:6048000"
+  # File cache options.
+  - "file-cache:max-size-mb:-1"
+  - "file-cache:cache-file-for-range-read:-1"
+# - name: gcsfuse-no-cache
+#   volumeAttributes:
+#   - gcsfuseMetadataPrefetchOnMount: "false"
+#   mountOptions:
+#   - "implicit-dirs"
+#   - "metadata-cache:stat-cache-max-size-mb:-1"
+#   - "metadata-cache:type-cache-max-size-mb:-1"
+#   - "metadata-cache:ttl-secs:6048000"
+
+  # - name: "test with metrics"
+  #   volumeAttributes:
+  #   - gcsfuseMetadataPrefetchOnMount: "false"
+  #   - disableMetrics: "false"
+  #   - mountOptions:
+  #     - "implicit-dirs"
+  #     - "metadata-cache:stat-cache-max-size-mb:-1"
+  #     - "metadata-cache:type-cache-max-size-mb:-1"
+  #     - "metadata-cache:ttl-secs:6048000"
+  #     - "file-cache:max-size-mb:-1"
+  #     - "file-cache:cache-file-for-range-read:-1"
+
+# All scenarios run against all targets
+
+storageLayouts:
+# - name: "-1"
+#   bucketName: gke-fio-64k-1m
+#   fileSize: 64K
+#   blockSize: 64K
+# - name: "-1"
+#   bucketName:  gke-fio-128k-1m
+#   fileSize: 128K
+#   blockSize: 128K
+# - name: "-1"
+#   bucketName:  gke-fio-1mb-1m
+#   fileSize: 1M
+#   blockSize: 256K
+- name: "-1"
+  bucketName:  gke-fio-100mb-50k
+  fileSize: 100M
+  blockSize: 1M
+# - name: "-1"
+#   bucketName:  gke-fio-200gb-1
+#   fileSize: 200G
+#   blockSize: 1M
+
+
+# FIO container resource limits. Set according to machine type, goal is usually to schedule only one pod per node in FIO.
+resourceLimits:
+  cpu: 100
+  memory: 400Gi
+
+# FIO configs.
+fio:
+  # File configs
+  fileSize: 64K
+  blockSize: 64K
+
+  # Read behavior configs
+  readType: read
+  direct: 0 # Skip page cache
+  
+  # Thread configs
+  numJobs: 50 # Number of threads
+  filesPerThread: "20000"
+
+  # Epoch configs
+  epochs: 4 # Number of reruns in same instance.
+  pauseBetweenEpochs: 20

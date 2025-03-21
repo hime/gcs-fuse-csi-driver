@@ -42,10 +42,13 @@ fio:
   filesPerThread: "20000"
 
   # Epoch configs
-  epochs: 1 # Number of reruns in same instance.
+  epochs: 1 # Number of reruns in same instance/pod.
   pauseBetweenEpochs: 20
 
 gcsfuse:
-  gcsfuseMetadataPrefetchOnMount: "false"
-  disableMetrics: "true"
-  mountOptions: "implicit-dirs,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,metadata-cache:ttl-secs:6048000,file-cache:max-size-mb:-1,file-cache:cache-file-for-range-read:-1"
+  volumeAttributes:
+    skipCSIBucketAccessCheck: "false"
+    gcsfuseMetadataPrefetchOnMount: "false"
+    gcsfuseLoggingSeverity: "trace"
+    disableMetrics: "true"
+  mountOptions: implicit-dirs

@@ -17,25 +17,50 @@
 
 import subprocess
 import sys
+import yaml
+
 
 def run_command(command: str):
     result = subprocess.run(command.split(" "), capture_output=True, text=True)
     print(result.stdout)
     print(result.stderr)
 
-bucketName_fileSize_blockSize = [
-    # ("gke-fio-64k-1m", "64K", "64K"), 
-    # ("gke-fio-128k-1m", "128K", "128K"),
-    # ("gke-fio-1mb-1m", "1M", "256K"),
-    ("gke-fio-100mb-50k", "100M", "1M"),
-    # ("gke-fio-200gb-1", "200G", "1M")
-    ]
+valid_volume_attributes = {
+    "skipCSIBucketAccessCheck",
+    "gcsfuseMetadataPrefetchOnMount",
+    "gcsfuseLoggingSeverity",
+    "disableMetrics",
+}
 
-scenarios = ["gcsfuse-file-cache"]
+data=None
+with open('gke-fio-config.yaml', 'r') as file:
+    try:
+        data = yaml.safe_load(file)
+        # Process the 'data' (it's now a Python dictionary or list)
+    except yaml.YAMLError as e:
+        print(f"Error parsing YAML file: {e}")
 
-for bucketName, fileSize, blockSize in bucketName_fileSize_blockSize:    
+
+# Load all storage layouts
+storage_layouts = []
+for layout in data['storageLayouts']:
+    bucketName = layout['bucketName']
+    fileSize = layout['fileSize']
+    blockSize = layout['blockSize']
+    storage_layouts.append((bucketName, fileSize, blockSize))
+
+# Load all test scenarios
+scenarios = []
+for scenario in data['scenarios']:
+    opts="\\,".join(scenario['mountOptions'])
+    scenarios.append((scenario['name'], scenario['volumeAttributes'], opts))
+
+
+# Apply all combinations to helm chart.
+for bucketName, fileSize, blockSize in storage_layouts:    
     for readType in ["randread"]:
-        for scenario in scenarios:
+        for scenario_name, volume_attributes, mountOptions in scenarios:
+
             if readType == "randread" and fileSize in ["64K", "128K"]:
                 continue
 
@@ -43,20 +68,28 @@ for bucketName, fileSize, blockSize in bucketName_fileSize_blockSize:
             if sys.argv[1] == "delete":
                 action = "uninstall"
 
-            commands = [f"helm {action} fio-loading-test-{fileSize.lower()}-{readType}-{scenario}"]
+            commands = [f"helm {action} fio-loading-test-{fileSize.lower()}-{readType}-{scenario_name}"]
 
             if action == "install":
                 commands.extend([
                             "loading-test",
                             f"--set bucketName={bucketName}",
-                            f"--set scenario={scenario}",
+                            f"--set scenario={scenario_name}",
                             f"--set fio.readType={readType}",
                             f"--set fio.fileSize={fileSize}",
-                            f"--set fio.blockSize={blockSize}"])
+                            f"--set gcsfuse.mountOptions={mountOptions}"])
+
+                for d in volume_attributes:
+                    for attr, val in d.items():
+                        if attr in valid_volume_attributes:
+                            commands.append(f"--set gcsfuse.volumeAttributes.{attr}={val}")
+                        else:
+                            raise ValueError(f"{attr} is not a valid volumeAttribute in GCSFuse CSI")
+
             
                 if fileSize == "100M":
                     commands.append("--set fio.filesPerThread=1000")
-            
             helm_command = " ".join(commands)
 
+            # print(helm_command)
             run_command(helm_command)
