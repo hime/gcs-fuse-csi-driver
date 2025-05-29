@@ -69,6 +69,7 @@ func main() {
 	}
 
 	for _, sp := range socketPaths {
+		klog.Infof("in sidecar mounter, found socket path %s", sp)
 		// sleep 1.5 seconds before launch the next gcsfuse to avoid
 		// 1. different gcsfuse logs mixed together.
 		// 2. memory usage peak.
@@ -123,6 +124,7 @@ func main() {
 	klog.Info("received SIGTERM signal, waiting for all the gcsfuse processes exit...")
 
 	if isNativeSidecar {
+		klog.Info("sidecar mounter calling cancel")
 		cancel()
 	}
 

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -106,6 +107,7 @@ func (m *Mounter) Mount(source string, target string, fstype string, options []s
 	klog.V(4).Infof("%v mounting the fuse filesystem", logPrefix)
 	err = m.MountSensitiveWithoutSystemdWithMountFlags(source, target, fstype, csiMountOptions, nil, []string{"--internal-only"})
 	if err != nil {
+		klog.Errorf("MountSensitiveWithoutSystemdWithMountFlags failed with error %v", err)
 		return fmt.Errorf("failed to mount the fuse filesystem: %w", err)
 	}
 
@@ -120,6 +122,7 @@ func (m *Mounter) Mount(source string, target string, fstype string, options []s
 		}()
 	}
 
+	klog.Infof("calling createSocket for target path %s", target)
 	listener, err := m.createSocket(target, logPrefix)
 	if err != nil {
 		// If mount failed at this step,
@@ -136,9 +139,10 @@ func (m *Mounter) Mount(source string, target string, fstype string, options []s
 
 	// Close the listener and fd after 1 hour timeout
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	// Since we close the fd, i dont think we support sidecar restarts with node restart support.
 	go func() {
 		<-ctx.Done()
-		klog.V(4).Infof("%v closing the socket and fd", logPrefix)
+		klog.Infof("%v closing the socket and fd", logPrefix)
 		listener.Close()
 		syscall.Close(fd)
 	}()
@@ -205,6 +209,7 @@ func (m *Mounter) createSocket(target string, logPrefix string) (net.Listener, e
 
 	// Prepare the temp emptyDir path
 	emptyDirBasePath, err := util.PrepareEmptyDir(target, true)
+	klog.Infof("Preparing emptydir gives us: %s", emptyDirBasePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare emptyDir path: %w", err)
 	}
@@ -213,34 +218,135 @@ func (m *Mounter) createSocket(target string, logPrefix string) (net.Listener, e
 	// Need to create symbolic link of emptyDirBasePath to socketBasePath,
 	// because the socket absolute path is longer than 104 characters,
 	// which will cause "bind: invalid argument" errors.
+
+	// To handle reinvocation we need to:
+	// 1. Delete socket
+	// 2. Create symlink
+	// 3. Create socket
+
+	// Step 1 & 2: Delete socket and symlink.
+	// Issue: other parts of codebase rely on symlink to exist, since the directory the symlink points to doesn't change, we can keep it.
+	// m.cleanupSocket(target)
+
 	socketBasePath := util.GetSocketBasePath(target, m.fuseSocketDir)
+	socketPath := filepath.Join(socketBasePath, socketName)
+
+	// Step 1: Attempt to remove a stale socket file before creating listener.
+	if _, err := os.Stat(socketPath); err == nil { // Check if it exists
+		klog.Info("Stale mount socket exists, attempting to remove")
+		err := os.Remove(socketPath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to remove stale socket file %q: %w", socketPath, err)
+		}
+		klog.Info("Stale mount socket deleted successfully")
+	}
+
+	// // Step 2 (old): Attempt to remove any existing file/symlink at socketBasePath to ensure a fresh link.
+	// // This is more aggressive than just checking os.IsExist on Symlink creation.
+	// if _, err := os.Lstat(socketBasePath); err == nil { // Check if something exists at socketBasePath without following it
+	// 	if errRemove := os.Remove(socketBasePath); errRemove != nil && !os.IsNotExist(errRemove) {
+	// 		return nil, fmt.Errorf("failed to remove existing file/symlink at %q: %w", socketBasePath, errRemove)
+	// 	}
+	// } else if !os.IsNotExist(err) { // Lstat failed for a reason other than "not exist"
+	// 	return nil, fmt.Errorf("error checking socket file status: %v", err)
+	// }
+
+	// Step 2: Create the symlink.
 	if err := os.Symlink(emptyDirBasePath, socketBasePath); err != nil && !os.IsExist(err) {
 		return nil, fmt.Errorf("failed to create symbolic link to path %q: %w", socketBasePath, err)
 	}
 
+	// Step 3: Create the socket.
 	klog.V(4).Infof("%v create a listener using the socket", logPrefix)
-	l, err := net.Listen("unix", filepath.Join(socketBasePath, socketName))
+	l, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a listener using the socket: %w", err)
 	}
 
-	// Change the socket ownership
+	// We also need to change the socket ownership in 3 steps.
+	// 1. Change ownership of base of emptyDirBasePath
+	// 2. Change ownership of /sockets directory
+	// 3. Change ownership of socket itself
+
 	targetSocketPath := filepath.Join(emptyDirBasePath, socketName)
-	if err = os.Chown(filepath.Dir(emptyDirBasePath), webhook.NobodyUID, webhook.NobodyGID); err != nil {
+	// First changing ownership of parent directory where socket resides. (one directory up it seems...)
+	// Full path: .../volumes/kubernetes.io~empty-dir/gke-gcsfuse-tmp/.volumes/
+	baseDir := filepath.Dir(emptyDirBasePath)
+	if err = os.Chown(baseDir, webhook.NobodyUID, webhook.NobodyGID); err != nil {
 		return nil, fmt.Errorf("failed to change ownership on base of emptyDirBasePath: %w", err)
 	}
+	klog.Infof("Chown on basedir %s done", baseDir)
+
+	// Changing ownership of base path directory.
+	// Full path: .../volumes/kubernetes.io~empty-dir/gke-gcsfuse-tmp/.volumes/my-vol
 	if err = os.Chown(emptyDirBasePath, webhook.NobodyUID, webhook.NobodyGID); err != nil {
 		return nil, fmt.Errorf("failed to change ownership on emptyDirBasePath: %w", err)
 	}
+	fInfo, err := os.Stat(emptyDirBasePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify the emptyDirBasePath: %w", err)
+	}
+	m.testUIDGID(fInfo)
+
+	klog.Infof("Chown on emptyDirBasePath %s success", emptyDirBasePath)
+
+	// Changing ownership of socket itself.
+	// Full path: .../volumes/kubernetes.io~empty-dir/gke-gcsfuse-tmp/.volumes/my-vol/socket
 	if err = os.Chown(targetSocketPath, webhook.NobodyUID, webhook.NobodyGID); err != nil {
 		return nil, fmt.Errorf("failed to change ownership on targetSocketPath: %w", err)
 	}
 
-	if _, err = os.Stat(targetSocketPath); err != nil {
+	klog.Infof("Chown on targetSocketPath %s success", targetSocketPath)
+	fInfo, err = os.Stat(targetSocketPath)
+	if err != nil {
 		return nil, fmt.Errorf("failed to verify the targetSocketPath: %w", err)
 	}
+	m.testUIDGID(fInfo)
 
+	if err = m.checkAndDeleteConfigFile(emptyDirBasePath, "config.yaml"); err != nil {
+		klog.Errorf("checkAndDeleteConfigFile err %s", err)
+	}
 	return l, nil
+}
+
+func (m *Mounter) checkAndDeleteConfigFile(dirPath, fileName string) error {
+	filePath := filepath.Join(dirPath, fileName)
+
+	// Use os.Stat to check for file existence.
+	// os.Stat returns an error if the file does not exist.
+	_, err := os.Stat(filePath)
+
+	if err == nil {
+		// File exists
+		log.Printf("File '%s' found in '%s'. Attempting to delete...", fileName, dirPath)
+
+		// Delete the file
+		if deleteErr := os.Remove(filePath); deleteErr != nil {
+			return fmt.Errorf("failed to delete file '%s': %w", filePath, deleteErr)
+		}
+		log.Printf("File '%s' successfully deleted.", fileName)
+		return nil
+	} else if os.IsNotExist(err) {
+		// File does not exist
+		log.Printf("File '%s' not found in '%s'. No action needed.", fileName, dirPath)
+		return nil
+	} else {
+		// Other error occurred (e.g., permissions issue, directory not found)
+		return fmt.Errorf("error checking for file '%s' in '%s': %w", fileName, dirPath, err)
+	}
+}
+
+func (m *Mounter) testUIDGID(fInfo os.FileInfo) {
+	sysStat, ok := fInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		klog.Errorf("could not get syscall.Stat_t from file info for %s. (Not on a Unix-like system?)\n", fInfo.Name())
+	}
+
+	actualUID := int(sysStat.Uid)
+	actualGID := int(sysStat.Gid)
+
+	fmt.Printf("Actual UID: %d, Expected UID: %d\n", actualUID, webhook.NobodyUID)
+	fmt.Printf("Actual GID: %d, Expected GID: %d\n", actualGID, webhook.NobodyGID)
 }
 
 func (m *Mounter) cleanupSocket(target string) {
@@ -262,7 +368,7 @@ func (m *Mounter) cleanupSocket(target string) {
 func startAcceptConn(l net.Listener, logPrefix string, msg []byte, fd int, cancel context.CancelFunc) {
 	defer cancel()
 
-	klog.V(4).Infof("%v start to accept connections to the listener.", logPrefix)
+	klog.Infof("%v start to accept connections to the listener.", logPrefix)
 	a, err := l.Accept()
 	if err != nil {
 		klog.Errorf("%v failed to accept connections to the listener: %v", logPrefix, err)
@@ -271,7 +377,7 @@ func startAcceptConn(l net.Listener, logPrefix string, msg []byte, fd int, cance
 	}
 	defer a.Close()
 
-	klog.V(4).Infof("%v start to send file descriptor and mount options", logPrefix)
+	klog.Infof("%v start to send file descriptor and mount options", logPrefix)
 	if err = util.SendMsg(a, fd, msg); err != nil {
 		klog.Errorf("%v failed to send file descriptor and mount options: %v", logPrefix, err)
 	}

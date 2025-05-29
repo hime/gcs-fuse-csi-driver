@@ -184,7 +184,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 
 	// Only pass mountOptions flags for defaulting if sidecar container is managed and satisifies min version requirement
-	if s.shouldPassDefaultingFlags(pod) {
+	if s.shouldPassDefaultingFlags(pod) { // we should check for mounted :)
 		shouldDisableAutoConfig := s.driver.config.DisableAutoconfig
 		machineType, ok := node.Labels[clientset.MachineTypeKey]
 		if ok {
@@ -197,32 +197,28 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		}
 	}
 
-	// Check if there is any error from the gcsfuse
-	code, err := checkGcsFuseErr(isInitContainer, pod, targetPath)
-	if code != codes.OK {
-		if code == codes.Canceled {
-			klog.V(4).Infof("NodePublishVolume on volume %q to target path %q is not needed because the gcsfuse has terminated.", bucketName, targetPath)
-
-			return &csi.NodePublishVolumeResponse{}, nil
-		}
-
-		return nil, status.Error(code, err.Error())
-	}
-
-	// Check if there is any error from the sidecar container
-	code, err = checkSidecarContainerErr(isInitContainer, pod)
-	if code != codes.OK {
-		return nil, status.Error(code, err.Error())
-	}
-
-	// TODO: Check if the socket listener timed out
-
-	// Check if the target path is already mounted
+	// Check if the target path is already mounted.
 	mounted, err := s.isDirMounted(targetPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to check if path %q is already mounted: %v", targetPath, err)
 	}
 
+	// Check if there is any error from the gcsfuse
+	code, err := checkGcsFuseErr(isInitContainer, pod, targetPath)
+	if err != nil {
+		klog.Infof("checkGcsFuseErr code %s", status.Error(code, err.Error()))
+	}
+
+	// Check if there is any error from the sidecar container.
+	code, err = checkSidecarContainerErr(isInitContainer, pod)
+	if err != nil {
+		// NOTE: Not failing the NodePublishVolume here prevents the SLOs from reporting these failures.
+		klog.Infof("checkSidecarContainerErr, code %s", status.Error(code, err.Error()))
+	}
+
+	// TODO: Check if the socket listener timed out
+
+	// Skip mount if the target path is already mounted.
 	if mounted {
 		klog.V(4).Infof("NodePublishVolume succeeded on volume %q to target path %q, mount already exists.", bucketName, targetPath)
 
