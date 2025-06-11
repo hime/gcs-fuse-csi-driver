@@ -151,6 +151,17 @@ endif
 	docker manifest push --purge ${PREFETCH_IMAGE}:${STAGINGVERSION}
 	docker manifest push --purge ${WEBHOOK_IMAGE}:${STAGINGVERSION}
 
+build-sidecar-mounter-and-push: init-buildx download-gcsfuse build-sidecar-mounter-linux-amd64
+	docker manifest create ${SIDECAR_IMAGE}:${STAGINGVERSION} ${SIDECAR_IMAGE}:${STAGINGVERSION}_linux_amd64
+	docker manifest push --purge ${SIDECAR_IMAGE}:${STAGINGVERSION}
+
+build-sidecar-mounter-linux-amd64:
+	docker buildx build ${DOCKER_BUILDX_ARGS} \
+		--file ./cmd/sidecar_mounter/Dockerfile \
+		--tag ${SIDECAR_IMAGE}:${STAGINGVERSION}_linux_amd64 \
+		--platform linux/amd64 \
+		--build-arg TARGETPLATFORM=linux/amd64 .
+
 build-image-linux-amd64:
 	docker buildx build ${DOCKER_BUILDX_ARGS} \
 		--file ./cmd/metadata_prefetch/Dockerfile \
