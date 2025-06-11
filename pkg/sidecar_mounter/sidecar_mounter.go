@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -91,7 +92,10 @@ func (m *Mounter) Mount(ctx context.Context, mc *MountConfig) error {
 	//nolint: gosec
 	cmd := exec.CommandContext(ctx, m.mounterPath, args...)
 	cmd.ExtraFiles = []*os.File{os.NewFile(uintptr(mc.FileDescriptor), "/dev/fuse")}
-	cmd.Stdout = os.Stdout
+	producerStdout, err := cmd.StdoutPipe()
+	if err != nil {
+		klog.Errorf("failed to redirect output: %v", err)
+	}
 	cmd.Stderr = io.MultiWriter(os.Stderr, mc.ErrWriter)
 	cmd.Cancel = func() error {
 		klog.V(4).Infof("sending SIGTERM to gcsfuse process: %v", cmd)
@@ -122,6 +126,23 @@ func (m *Mounter) Mount(ctx context.Context, mc *MountConfig) error {
 
 			return
 		}
+
+		// Step 4: Launch the filtering goroutine
+		go func() {
+			klog.Infof("labeler routine started for volume %s", mc.VolumeName)
+
+			scanner := bufio.NewScanner(producerStdout) // Read line by line from the pipe
+			for scanner.Scan() {
+				line := scanner.Text()
+				// This is where your custom Go filtering logic goes
+				klog.Infof(mc.VolumeName + ": " + line) // Write the filtered output directly to os.Stdout
+			}
+			if err := scanner.Err(); err != nil {
+				log.Printf("Error reading from producerCmd stdout: %v", err)
+			}
+			klog.Infof("terminating labeler routine for volume %s", mc.VolumeName)
+
+		}()
 
 		klog.Infof("gcsfuse for bucket %q, volume %q started with process id %v", mc.BucketName, mc.VolumeName, cmd.Process.Pid)
 
